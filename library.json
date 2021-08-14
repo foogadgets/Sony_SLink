@@ -1,16 +1,16 @@
 {
   "name": "Sony_SLink",
   "keywords": "SONY, S-LINK, Control-A1",
-  "description": "Arduino SONY S-LINK/Control-A1 Protocol Library",
+  "description": "Arduino ESP8266 SONY S-LINK/Control-A1 Protocol Library using 2-pin communication",
   "repository":
   {
     "type": "git",
-    "url": "https://github.com/Ircama/Sony_SLink.git"
+    "url": "https://github.com/foogadgets/Sony_SLink.git"
   },
   "version": "1.0.0",
   "authors": {
-    "name": "Ircama",
-    "url": "https://github.com/Ircama"
+    "name": "foogadgets",
+    "url": "https://github.com/foogadgets"
   },
   "frameworks": "arduino",
   "platforms": "*"

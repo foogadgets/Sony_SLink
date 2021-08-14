@@ -1,90 +1,48 @@
 /*
+
   Arduino SONY S-LINK/Control-A1 Protocol Library
 
-  https://github.com/Ircama/Sony_SLink.git
+  https://github.com/foogadgets/Sony_SLink.git
 
-  (C) Ircama, 2017, CC-BY-SA 4.0
+  This code is based on the code written by (C) Ircama
+  The original code is licenced under 2017, CC-BY-SA 4.0
   https://creativecommons.org/licenses/by-sa/4.0/
+  and so is this code.
 
-
-  Code heavily based on
-  - hajdbo's code:
-    https://github.com/hajdbo/sony-jukebox-slink/blob/master/jukebox.pde
-  - EdsterG's code:
-    https://github.com/EdsterG/LANC_Library
-
-  Reference documents:
-  - Sony S-Link gateway document:
-    http://ee.bradley.edu/projects/proj2001/sonyntwk/SLink.PDF
-
-  - How SONY's S-LINK/CTRL-A(II) protocol works (waveform):
-    http://boehmel.de/slink.htm
-
-  - Codes for Sony STR-DA50ES receiver:
-    http://www.hifi-remote.com/sony/Sony_dsp_192.htm
-
-  - S-Link Parallel Device for Linux
-    http://web.archive.org/web/20040722060841/http://www.undeadscientist.com/slink/index.html
-
-  - Reverse Engineered Control-A1 codes (Using the Sony CDP-CX250) Written by BigDave (2/19/98)
-    http://web.archive.org/web/19981202175957/http://www.cc.gatech.edu/people/home/bigdave/cdplayer/control-a1.txt
-
-  - Working S-Link code - Background of the S-link protocol
-    http://forums.parallax.com/discussion/70973/working-s-link-code-long
-
-  - Slink Send and Receive Commands for Sony MiniDisc Recorders
-    http://web.archive.org/web/20030419100153/http://web2.airmail.net/will/mdslink.txt
-
-  - Jukebox Interface Guide
-    http://web.archive.org/web/20030414200645/http://www.upl.cs.wisc.edu/~orn/jukebox/guide.html
-
-  - Original Control-A1 document
-    http://web.archive.org/web/20030414231523/http://www.upl.cs.wisc.edu/~orn/jukebox/controla1.html
-
-  Tested with a Sony STR-DA50ES receiver/amplifier.
-  Service manual: http://sportsbil.com/sony/STR/STR-D/STR-DA30ES_DA50ES_V55ES_v1.1.pdf
-  
-  This protocol is very slow: average 355 bps half duplex for a standard two-byte send transmission taking 45 millisecs (355=16/0,045).
-
-  Feel free to share this source code, but include explicit mention to the author.
-  Licensed under creative commons - see http://creativecommons.org/licenses/by-sa/3.0/
+  The code deviates in several points.
+  1. The protocol implements the use of 2 pin communication. RX and TX. This in order to reuse the Sony HW implementation of the S-Link hardware interface.
+  2. There is error correction
+  3. There is support for writing full Table of Contents to a MiniDisc.
+  4. There is support for receiving signals from a S-Link device.
+  5. Timing parameters have been adjusted and signalling have been verified using Oscilloscope and Logic analyzer to get the timing right. A Sony MDS-JB940 QS was used as reference.
 
 */
 
 #include "Sony_SLink.h"
-#include <util/atomic.h>
 
-#define bitWidth 3000 //Default bit width (in micro seconds)
 
 /* Initialize protocol */
 
-void Slink::init(int slinkPin){
-  _slinkPin=slinkPin;
-  pinMode(_slinkPin, INPUT); // Define pin mode INPUT for slinkPin.
-                             // Will be changed to output when writing.
+void
+Slink::init(int slinkInPin, int slinkOutPin){
+  this->_slinkInPin=slinkInPin;
+  this->_slinkOutPin=slinkOutPin;
+  pinMode(this->_slinkInPin, INPUT); // Define pin mode INPUT for slinkPin.
+  pinMode(this->_slinkOutPin, OUTPUT); // Define pin mode OUTPUT for slinkPin.
+  digitalWrite(this->_slinkOutPin, LOW); // release the default HIGH state
 
-/*
- * Notice that activating the internal pullup resistor is not needed,
- * as S-LINK is already pulled up to +5.1V with a 5kOhm resistor (ref.
- * Sony STR-DA50ES; other devices might have sightly different pull-up
- * resistors and voltage). Besides, S-LINK is a bidirectional protocol.
- * Do not forget a diode and a 220 Ohm resistor between slinkPin and
- * the Control-A1 jack, to limit the maximum current drawn by the
- * microcontroller in case of transmission collision.
- */
-
+  for (uint8_t i=0; i<TOCBUFLEN; i++) {
+    memset(this->_titleBuffer[i], 0, TOCSTRLEN+1);
+  }
 }
 
-// We advise to issue every command twice, in case the first time collided
-// with an incoming response sequence from the other device
 
-void Slink::sendCommand(unsigned int deviceId, unsigned int commandId1, int commandId2, int commandId3){
+void
+Slink::sendCommand(unsigned int deviceId, unsigned int commandId1, int commandId2, int commandId3){
   unsigned long Start;
 
-  pinMode(_slinkPin, INPUT);
   _lineReady();          // Check line availability to write a frame
   Start = micros();
-  pinMode(_slinkPin, OUTPUT); // Change pin mode to OUTPUT for slinkPin.
   _writeSync();          // Beginning of new transmission
   _writeByte(deviceId);  // Select device (one byte)
   _writeByte(commandId1); // Send the actual Command-Code (one byte)
@@ -92,14 +50,162 @@ void Slink::sendCommand(unsigned int deviceId, unsigned int commandId1, int comm
     _writeByte(commandId2); // Send the actual Command-Code (one byte)
   if (commandId3>=0)
     _writeByte(commandId3); // Send an additional Command-Code (one byte)
-  pinMode(_slinkPin, INPUT); // Return to INPUT
+
   do { // The command sequence must be padded (by 5V) at the end to make it 45 millisec. long
-  delayMicroseconds(SLINK_LOOP_DELAY);
-  if (digitalRead(_slinkPin)==LOW)
-    break; // break padding if the other device starts transmitting meanwhile
+    delayMicroseconds(SLINK_LOOP_DELAY);
+    if (digitalRead(this->_slinkInPin)==LOW)
+      break; // break padding if the other device starts transmitting meanwhile
   } //  (but the padding rule is apparently not very strict)
   while (micros()-Start < SLINK_WORD_DELIMITER);
 }
+
+
+
+bool
+Slink::writeTrackTitle(uint8_t trackNo, char* diskTitle) {
+/*
+9A TT 00 00 [14d x CC]	write track text	if CC<14d, fill with 00 (ok, answer 1F)
+9B BB [16d x CC]	write track more text	BB>1 (block), if CC<16d, fill with 00 (ok, answer 1F)
+*/
+
+  uint8_t segments = _prepareTitleBuffer(diskTitle);
+
+  if(!_writeDiskTitle(0x9a, trackNo, this->_titleBuffer[0])) { return false; }
+  if (segments > 1) {
+    for (uint8_t i=1; i<segments; i++) {
+      if(!_writeDiskTitle(0x9b, i+1, this->_titleBuffer[i])) { return false; }
+    }
+  }
+  return true;
+}
+
+
+bool
+Slink::writeDiskTitle(char* diskTitle) {
+/*
+98 DD 00 00 [14d x CC]	write disc text	if CC<14d, fill with 00 (ok, answer 1F)
+99 BB [16d x CC]	write disc more text	BB>1 (block), if CC<16d, fill with 00 (ok, answer 1F)
+*/
+
+  uint8_t segments = _prepareTitleBuffer(diskTitle);
+
+  if(!_writeDiskTitle(0x98, 0x01, this->_titleBuffer[0])) { return false; }
+  if (segments > 1) {
+    for (uint8_t i=1; i<segments; i++) {
+      if(!_writeDiskTitle(0x99, (i+1), this->_titleBuffer[i])) { return false; }
+    }
+  }
+  return true;
+}
+
+
+uint8_t
+Slink::_prepareTitleBuffer(char* title) {
+  uint16_t titleLen = 2 + strlen(title);
+  uint8_t segments = 1 + (titleLen / (TOCSTRLEN+0.0001));
+// Init all buffer to \0
+  for (uint8_t i=0; i<TOCBUFLEN; i++) {
+    memset(this->_titleBuffer[i], 0, TOCSTRLEN+1);
+  }
+
+// Write first title buffer, start with 0x00, 0x00 (already in buffer after init)
+  strncpy(&this->_titleBuffer[0][2], title, (TOCSTRLEN-2));
+
+  if (segments > 1) {
+    for (uint8_t i=1; i<segments; i++) {
+      strncpy(this->_titleBuffer[i], &title[i*TOCSTRLEN-2], TOCSTRLEN);
+    }
+  }
+
+  return segments;
+}
+
+
+bool
+Slink::_writeDiskTitle(uint8_t slinkCommand, uint8_t trackDiskNo, char* diskTitle) {
+  char recvBuffer[2];
+  uint8_t retries = 0;
+
+  do {
+    _lineReady();         // Check line availability to write a frame
+    _writeSync();         // Beginning of new transmission
+    _writeByte(0xb0);		// Select device (one byte)
+    _writeByte(slinkCommand);		// Send the actual Command-Code (one byte)
+    _writeByte(trackDiskNo);		// Send the actual Command-Code (one byte)
+    for (uint8_t i=0;i<TOCSTRLEN; i++) {
+      _writeByte(diskTitle[i]);         // Send the actual Command-Code (one byte)
+    }
+
+    delayMicroseconds(2*SLINK_LINE_READY);
+
+    if (0 == strncmp("\xb8", _recvAnswer(recvBuffer, 2), 1)) {
+      if (0 == strncmp("\x1f", &recvBuffer[1], 1)) {
+        delayMicroseconds(2*SLINK_LINE_READY);
+	return true;
+      }
+    }
+
+    Serial.println("Error. Resending data");
+
+    retries++;
+    delayMicroseconds(2*SLINK_LINE_READY);
+
+  } while( retries < 3 );
+
+  return false;
+}
+
+
+char*
+Slink::_recvAnswer(char* recvBuffer, size_t bufSize) {
+  unsigned long pulseDuration = 0;
+  unsigned long Start = 0;
+  uint8_t state = 0;
+  uint8_t count = 0; // tracks what bit we are currently working with
+  uint8_t byteBuffer = 0;
+  uint8_t bytesRecv = 0;
+ 
+  memset(recvBuffer, 0, bufSize);
+
+  Start = micros();
+
+  do {
+    pulseDuration = pulseIn(this->_slinkInPin, LOW, 55000UL); // timeout to 40ms
+    if (pulseDuration == 0) { // no sending ongoing within Timeout
+      continue;
+    }
+    else {  // We found a pulse and will analyze.
+      switch( state ) {
+        case 0:
+          if ((pulseDuration > (SLINK_MARK_SYNC / SLINK_MARK_RANGE)) && (pulseDuration < SLINK_MARK_SYNC * SLINK_MARK_RANGE)) {
+            byteBuffer = 0;
+            count = 0;
+            state = 1;
+          }
+	      break;
+        case 1:
+          if ((pulseDuration > SLINK_MARK_ONE / SLINK_MARK_RANGE) && (pulseDuration < SLINK_MARK_ONE * SLINK_MARK_RANGE)) {
+            byteBuffer |= 128>>count;
+          }
+
+          if (count++ == 7) {
+            strncpy(&recvBuffer[bytesRecv++],(char*)&byteBuffer, 1);
+            byteBuffer = 0;
+            count = 0;
+            state = 1;
+            if ( bytesRecv==bufSize )
+              state = 2;
+          }
+          break;
+        case 2:
+          break;
+      }  // else
+    }    // else Pulse detected within 5ms
+  }      // do
+  while (micros()-Start < 60000UL && state !=2 );
+  return &recvBuffer[0];
+}
+
 
 /* Check line availability before transmitting or receiving
 
@@ -111,62 +217,66 @@ void Slink::sendCommand(unsigned int deviceId, unsigned int commandId1, int comm
  * transmission prevents from collisions in nearly all cases.
  */
 
-void Slink::_lineReady(){
+void
+Slink::_lineReady(){
   unsigned long Start = micros();
   unsigned long beginTimeout = Start;
 
-  //Search for a 3ms=3000uSec gap (at least), being HIGH continuosly.
+  //Search for a 5ms=5000uSec gap (at least), being HIGH continuosly.
 
   do {
     delayMicroseconds(SLINK_LOOP_DELAY);
-    if (digitalRead(_slinkPin)==LOW)
+    if (digitalRead(this->_slinkInPin)==LOW)
       Start = micros(); // reset the loop each time traffic is detected
   }
-  while ( (micros()-Start < SLINK_LINE_READY) && (micros()-beginTimeout < SLINK_LOOP_TIMEOUT) );
+  while ( ((micros()-Start) < SLINK_LINE_READY) && ((micros()-beginTimeout) < SLINK_LOOP_TIMEOUT) );
 }
 
 /*
  * Synchronisation:
  * holding the line low for SLINK_MARK_SYNC uS indicates the beginning of new transmission
  */
-void Slink::_writeSync(){
-  pinMode(_slinkPin, OUTPUT); // Change pin mode to OUTPUT for slinkPin.
-  digitalWrite(_slinkPin, LOW); // start sync (line low)
+void
+Slink::_writeSync(){
+  digitalWrite(this->_slinkOutPin, HIGH); // start sync (line low)
   delayMicroseconds(SLINK_MARK_SYNC); // keep line low for SLINK_MARK_SYNC uS
-  digitalWrite(_slinkPin, HIGH); // release the default HIGH state
+  digitalWrite(this->_slinkOutPin, LOW); // release the default HIGH state
   delayMicroseconds(SLINK_MARK_DELIMITER); // Delimiter (between Sync, Ones and Zeros, the line must be released (return to high level) for SLINK_MARK_DELIMITER uS)
 }
 
 //-------------------------------------------------------------------------------------
 
-void Slink::_writeByte(byte value){
+void
+Slink::_writeByte(byte value){
 /*
  * Zero bit: holding the line low for SLINK_MARK_ZERO uS indicates a 0
  * One bit: holding the line low for SLINK_MARK_ONE uS indicates a 1
  * Delimiter between Sync, Ones and Zeros, the line must be released (return to high level) for SLINK_MARK_DELIMITER uS
  */
 
-  pinMode(_slinkPin, OUTPUT); // Change pin mode to OUTPUT for slinkPin.
   for (int i=7; i>=0; i--) {
+    digitalWrite(this->_slinkOutPin, HIGH);
     if (value & 1<<i) {
-      digitalWrite(_slinkPin, LOW);
       delayMicroseconds(SLINK_MARK_ONE);
-      digitalWrite(_slinkPin, HIGH);
-      delayMicroseconds(SLINK_MARK_DELIMITER);
       }
     else {
-      digitalWrite(_slinkPin, LOW);
       delayMicroseconds(SLINK_MARK_ZERO);
-      digitalWrite(_slinkPin, HIGH);
-      delayMicroseconds(SLINK_MARK_DELIMITER);
       }
+    digitalWrite(this->_slinkOutPin, LOW);
+    delayMicroseconds(SLINK_MARK_DELIMITER);
   }
 }
 
 //-------------------------------------------------------------------------------------
 
-int Slink::pin(){
-  return _slinkPin;
+int
+Slink::outPin(){
+  return this->_slinkOutPin;
+}
+
+int
+Slink::inPin(){
+  return this->_slinkInPin;
 }
 
 //-------------------------------------------------------------------------------------
@@ -175,17 +285,18 @@ int Slink::pin(){
 // This function is for debugging purpose and is valid for ATMEL devices provided with serial interface,
 // which is used to output the monitoring information related to S-Link timings and data, read from the input port.
 #if !defined (__AVR_ATtiny85__)
-void Slink::inputMonitor(int type, // 0=measure timing, 1=decode and dump binary & hex, 2=decode and dump hex
+void
+Slink::inputMonitor(int type, // 0=measure timing, 1=decode and dump binary & hex, 2=decode and dump hex
                          boolean idle, // false(default)=measure mark (=data), true=measure idle timing (=delimiters)
                          // for S-Link protocol, marks can return sync (2400usec), zero (600usec), one (1200usec)
-                         // idle=true can only be used with type=0 and timing should always return 600 usec (delimiter)
+                         // idle=true can onewLiney be used with type=0 and timing should always return 600 usec (delimiter)
                          unsigned long uSecTimeout, // monitoring timeout; defaults to 10 seconds
                          // information read from S-Link is buffered until timeout and then dumped to the serial port
                          unsigned long serialSpeed // baud rate of the serial port (defaults to 115.2kbps)
                          ){
   unsigned long value = 0;
   unsigned long Start = micros();
-  int nl=0;
+  int newLine=0;
   int count=0;
   int byte=0;
   String buffer = "";
@@ -193,11 +304,11 @@ void Slink::inputMonitor(int type, // 0=measure timing, 1=decode and dump binary
   Serial.begin(serialSpeed);
   Serial.println("Start monitor");
     do {
-      value = pulseIn(_slinkPin, idle, 3000UL); // timeout to 3 milliseconds=3000 uSec
+      value = pulseIn(this->_slinkInPin, idle, 5000UL); // timeout to 5 milliseconds=5000 uSec
       if (value==0) {
-        if (nl==0)
+        if (newLine==0)
           buffer += String("\n");
-        nl=1;
+        newLine=1;
         count=0;
         byte=0;
       }
@@ -238,7 +349,7 @@ void Slink::inputMonitor(int type, // 0=measure timing, 1=decode and dump binary
             }
             break;
         }
-        nl=0;
+        newLine=0;
       } // else
     } // do
     while (micros()-Start < uSecTimeout);

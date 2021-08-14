@@ -10,13 +10,14 @@
  * Each 10 secs the device is powered on and then off.
  */
 
-#define SLINK_PIN 2 // S-Link Control-A1 pin
+#define SLINK_INPIN 2 // S-Link Control-A1 pin
+#define SLINK_OUTPIN 3 // S-Link Control-A1 pin
 
 #include "Sony_SLink.h"
 Slink slink;
 
 void setup() {
-  slink.init(SLINK_PIN); // Set-up S-Link pin
+  slink.init(SLINK_INPIN, SLINK_OUTPIN); // Set-up S-Link pin
 }
 
 void loop() {
