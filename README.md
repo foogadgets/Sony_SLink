@@ -34,8 +34,8 @@ To use the library in your own sketch, select it from *Sketch > Import Library*.
 Simplest example of using this library:
 
 ```c++
-#define SLINK_INPIN 5 // S-Link Control-A1 pin
-#define SLINK_OUTPIN 4 // S-Link Control-A1 pin
+#define SLINK_INPIN 5 // S-Link Control - input pin
+#define SLINK_OUTPIN 4 // S-Link Control - output pin
 
 #include "Sony_SLink.h"
 Slink slink;
