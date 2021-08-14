@@ -2,26 +2,23 @@
 
 **Arduino SONY S-LINK/Control-A1 Protocol Library.**
 
+  This code is based on the code written by (C) Ircama, https://github.com/Ircama/Sony_SLink.git
+
+  The code deviates in several points.
+  1. The protocol implements the use of 2 pin communication. RX and TX. This in order to reuse the Sony HW implementation of the S-Link hardware interface.
+  2. There is error correction
+  3. There is support for writing full Table of Contents to a MiniDisc.
+  4. There is support for receiving signals from a S-Link device.
+  5. Timing parameters have been adjusted and signalling have been verified using Oscilloscope and Logic analyzer to get the timing right. A Sony MDS-JB940 QS was used as reference.
+
+
 This library allows to drive Sony audio consumer devices connected through the
 Sony S-Link bus-system.
-
-It also includes trivial monitoring capabilities for the S-Link interface, to test
-and dump received sequences.
 
 (C) Ircama, 2017, CC-BY-SA 4.0
 https://creativecommons.org/licenses/by-sa/4.0/
 
-In standard operation, the code is targeted to the ATtiny85 microcontroller (e.g.
-Digispark ATtiny85). As the ATtiny85 USB interface does not allow confortable
-monitoring and debugging features, dumping the S-Link interface can be achieved through
-an ATmega328P micro (e.g., Arduino Nano).
-
-Examples of sketches using this library:
-
-- https://github.com/Ircama/AtTinyTestIR
-- https://github.com/Ircama/IR2SLink
-
-For Digispark ATTINY85 check also this note: https://gist.github.com/Ircama/22707e938e9c8f169d9fe187797a2a2c
+The code is targeted to the ESP8266 microcontroller.
 
 -------------------------------------------------------------------------------------------------------------------
 
@@ -37,13 +34,14 @@ To use the library in your own sketch, select it from *Sketch > Import Library*.
 Simplest example of using this library:
 
 ```c++
-#define SLINK_PIN 2 // S-Link Control-A1 pin
+#define SLINK_INPIN 5 // S-Link Control-A1 pin
+#define SLINK_OUTPIN 4 // S-Link Control-A1 pin
 
 #include "Sony_SLink.h"
 Slink slink;
 
 void setup() {
-  slink.init(SLINK_PIN); // Set-up S-Link pin
+  slink.init(SLINK_INPIN, SLINK_OUTPIN); // Set-up S-Link pin
   slink.sendCommand(SLINK_DEVICE_AMP, SLINK_CMD_AMP_POWER_ON);
 }
 
@@ -55,7 +53,7 @@ Check the *examples* directory for further examples.
 
 # Description of the functions
 
-`slink.init(slinkPin)` - set-up S-Link pin
+`slink.init(SLINK_INPIN, SLINK_OUTPIN)` - set-up S-Link pin
 
 `slink.sendCommand(device, command)` - send a command to the device; check [Sony_SLink.h](https://github.com/Ircama/Sony_SLink/blob/master/Sony_SLink.h) for available commands
 
@@ -101,6 +99,8 @@ delay(3); //up to delay(1960);
 # Notes
 
   Code heavily based on:
+  - Ircama's code:
+    https://github.com/Ircama/Sony_SLink.git
   - hajdbo's code:
     https://github.com/hajdbo/sony-jukebox-slink/blob/master/jukebox.pde
   - EdsterG's code:
@@ -134,8 +134,7 @@ delay(3); //up to delay(1960);
   - Original Control-A1 document
     http://web.archive.org/web/20030414231523/http://www.upl.cs.wisc.edu/~orn/jukebox/controla1.html
 
-  Tested with a Sony STR-DA50ES receiver/amplifier.
-  Service manual: http://sportsbil.com/sony/STR/STR-D/STR-DA30ES_DA50ES_V55ES_v1.1.pdf
+  Tested with a Sony MDS-JB940 QS MiniDisc Recorder.
   
   This protocol is very slow: average 355 bps half duplex for a standard two-byte send transmission taking 45 millisecs (355=16/0,045).
 
